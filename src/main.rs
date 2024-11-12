@@ -1,8 +1,13 @@
 use core::str;
+use std::sync::mpsc::TryRecvError;
 use std::{fs, sync::mpsc, thread};
 
 use opencv::{core::*, imgproc, prelude::*};
 use opencv::{dnn, highgui, videoio};
+
+const WEIGHTS_FILE: &str = "data/yolov3-tiny.weights";
+const CONFIG_FILE: &str = "data/yolov3-tiny.cfg";
+const CLASSES_FILE: &str = "data/yolov3.txt";
 
 type Detections = (Vector<i32>, Vector<f32>, Vector<Rect_<i32>>);
 
@@ -10,20 +15,20 @@ fn main() {
     let (t_feed, r_feed) = mpsc::channel();
     let (t_detections, r_detections) = mpsc::channel();
 
-    let classes = fs::read("data/coco.txt").unwrap();
+    let classes = fs::read(CLASSES_FILE).unwrap();
     let classes: Vec<&str> = str::from_utf8(&classes).unwrap().split("\n").collect();
 
     let mut cam = videoio::VideoCapture::new(0, videoio::CAP_V4L).unwrap();
     let mut feed = Mat::default();
 
     thread::spawn(move || {
-        let mut model =
-            dnn::DetectionModel::new("data/yolov3-spp.weights", "data/yolov3-spp.cfg").unwrap();
+        let mut model = dnn::DetectionModel::new(WEIGHTS_FILE, CONFIG_FILE).unwrap();
         let mut init = false;
         loop {
-            let feed: Mat = match r_feed.recv() {
+            let feed: Mat = match r_feed.try_recv() {
                 Ok(feed) => feed,
-                _ => break,
+                Err(TryRecvError::Empty) => continue,
+                Err(TryRecvError::Disconnected) => break,
             };
             if !init {
                 init = true;
@@ -35,7 +40,7 @@ fn main() {
             let mut detections = Detections::default();
             let (ref mut class_ids, ref mut scores, ref mut rects) = &mut detections;
             model.detect_def(&feed, class_ids, scores, rects).unwrap();
-            t_detections.send(detections).unwrap();
+            let _ = t_detections.send(detections);
         }
     });
 
